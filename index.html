@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Ride Accepter</title>
+<meta name="theme-color" content="#FACC15" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon.svg" />
+<link rel="apple-touch-icon" href="icons/icon.svg" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  body { -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const AREA_POOL = ["Whitefield","Indiranagar","Koramangala","MG Road","Electronic City","Hebbal","JP Nagar","Old Town","Industrial Area","Airport Road"];
+const PLATFORM_STYLE = { Ola: { bg: "bg-yellow-400", text: "text-black" }, Uber: { bg: "bg-neutral-900", text: "text-white" }, Rapido: { bg: "bg-yellow-500", text: "text-black" }, "Bharat Taxi": { bg: "bg-orange-500", text: "text-white" } };
+const rand = (min, max) => Math.random() * (max - min) + min;
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+function generateRide(enabledPlatforms) {
+  const platform = pick(enabledPlatforms.length ? enabledPlatforms : ["Ola","Uber","Rapido","Bharat Taxi"]);
+  const pickupDist = +rand(0.3, 3.8).toFixed(1);
+  const rideDist = +rand(1.5, 14.5).toFixed(1);
+  const perKmRate = rand(9, 17);
+  const fare = Math.max(30, Math.round(25 + perKmRate * rideDist + rand(-10, 10)));
+  const bonus = Math.random() < 0.35 ? pick([5, 10, 15, 20]) : 0;
+  const total = fare + bonus;
+  return { id: Date.now() + Math.random(), platform, pickupDist, rideDist, fare, bonus, total, perKm: +(total / rideDist).toFixed(1), area: pick(AREA_POOL), from: pick(AREA_POOL) };
+}
+
+function evaluateRide(ride, filters, goAreas, nonGoAreas) {
+  if (nonGoAreas.includes(ride.area)) return { decision: "reject", reason: "Heads into a non-go area", zone: "avoid" };
+  if (goAreas.includes(ride.area)) return { decision: "accept", reason: "Heads into a go-to area", zone: "go" };
+  const passes = ride.total >= filters.minFare && ride.perKm >= filters.minPerKm && ride.pickupDist <= filters.maxPickupDist && ride.rideDist <= filters.maxRideDist;
+  return passes ? { decision: "accept", reason: "Matches your filters", zone: "neutral" } : { decision: "reject", reason: "Below your filter settings", zone: "neutral" };
+}
+
+function speak(text) {
+  try {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+function Toggle({ checked, onChange, motion }) {
+  return (
+    <button onClick={() => onChange(!checked)}
+      className={`w-14 h-8 rounded-full flex items-center px-1 ${motion ? "transition-colors duration-200" : ""} ${checked ? "bg-green-600 justify-end" : "bg-neutral-300 justify-start"}`}
+      aria-pressed={checked}>
+      <span className="w-6 h-6 rounded-full bg-white shadow" />
+    </button>
+  );
+}
+
+function TabButton({ active, onClick, icon, label, big }) {
+  return (
+    <button onClick={onClick} className={`flex-1 flex flex-col items-center gap-1 ${big ? "py-3" : "py-2"} ${active ? "text-yellow-500" : "text-neutral-400"}`}>
+      <span className={big ? "text-2xl" : "text-xl"}>{icon}</span>
+      <span className={`${big ? "text-sm" : "text-xs"} font-medium`}>{label}</span>
+    </button>
+  );
+}
+
+function FilterRow({ label, unit, value, min, max, step, onChange, card, bodySz, muted }) {
+  return (
+    <div className={`${card} rounded-2xl p-4`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={`${bodySz} font-medium`}>{label}</span>
+        <span className={`${bodySz} font-bold`}>{unit === "₹" ? "₹" : ""}{value}{unit !== "₹" ? ` ${unit}` : ""}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)} className="w-full accent-yellow-500" />
+      <div className={`flex justify-between text-xs ${muted} mt-1`}><span>{min}</span><span>{max}</span></div>
+    </div>
+  );
+}
+
+function AreaList({ title, hint, color, items, onRemove, addValue, setAddValue, onAdd, options, card, bodySz, muted }) {
+  const chip = color === "green" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700";
+  return (
+    <div className={`${card} rounded-2xl p-4`}>
+      <div className={`${bodySz} font-medium`}>{title}</div>
+      <div className={`text-sm ${muted} mb-3`}>{hint}</div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {items.length === 0 && <span className={`text-sm ${muted}`}>None added yet</span>}
+        {items.map((a) => (
+          <span key={a} className={`flex items-center gap-1 px-3 py-1 rounded-full text-sm ${chip}`}>
+            {a}<button onClick={() => onRemove(a)}>✕</button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <select value={addValue} onChange={(e) => setAddValue(e.target.value)} className="flex-1 border border-neutral-300 rounded-xl px-3 py-2 text-sm bg-white text-neutral-900">
+          <option value="">Choose an area…</option>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <button onClick={onAdd} disabled={!addValue} className="px-4 rounded-xl bg-yellow-400 text-black font-semibold flex items-center gap-1 disabled:opacity-40">+ Add</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingRow({ icon, label, sub, checked, onChange, card, bodySz, muted, motion }) {
+  return (
+    <div className={`${card} rounded-2xl p-4 flex items-center justify-between gap-3`}>
+      <div className="flex items-center gap-3">
+        <span className={`text-xl ${muted}`}>{icon}</span>
+        <div><div className={`${bodySz} font-medium`}>{label}</div><div className={`text-sm ${muted}`}>{sub}</div></div>
+      </div>
+      <Toggle checked={checked} onChange={onChange} motion={motion} />
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState("home");
+  const [online, setOnline] = useState(true);
+  const [autoAccept, setAutoAccept] = useState(true);
+  const [filters, setFilters] = useState({ minFare: 60, minPerKm: 12, maxPickupDist: 2.5, maxRideDist: 12 });
+  const [goAreas, setGoAreas] = useState(["Whitefield", "Indiranagar"]);
+  const [nonGoAreas, setNonGoAreas] = useState(["Industrial Area"]);
+  const [platforms, setPlatforms] = useState({ Ola: true, Uber: true, Rapido: true, "Bharat Taxi": true });
+  const [access, setAccess] = useState({ largeText: false, highContrast: false, voice: true, vibration: true, bigButtons: false, reduceMotion: false });
+  const [ride, setRide] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [countdown, setCountdown] = useState(15);
+  const [log, setLog] = useState([]);
+  const [addGo, setAddGo] = useState("");
+  const [addNonGo, setAddNonGo] = useState("");
+
+  const motion = !access.reduceMotion;
+
+  useEffect(() => {
+    if (!online || status !== "idle") return;
+    const t = setTimeout(() => spawnRide(), rand(4000, 8500));
+    return () => clearTimeout(t);
+  }, [online, status, platforms]);
+
+  const spawnRide = useCallback(() => {
+    const enabled = Object.keys(platforms).filter((p) => platforms[p]);
+    if (!enabled.length) return;
+    const r = generateRide(enabled);
+    setRide(r); setStatus("incoming"); setCountdown(15);
+    if (access.voice) speak(`New ride from ${r.platform}. Fare ${r.fare} rupees. ${r.rideDist} kilometers to ${r.area}.`);
+    if (access.vibration && navigator.vibrate) navigator.vibrate([200, 80, 200]);
+  }, [platforms, access]);
+
+  const resolveRide = useCallback((result) => {
+    setLog((l) => [{ ...ride, ...result, time: new Date() }, ...l].slice(0, 20));
+    setStatus("done");
+    setTimeout(() => { setRide(null); setStatus("idle"); }, 700);
+  }, [ride]);
+
+  useEffect(() => {
+    if (status !== "incoming" || !ride) return;
+    if (autoAccept) {
+      const t = setTimeout(() => resolveRide(evaluateRide(ride, filters, goAreas, nonGoAreas)), 1400);
+      return () => clearTimeout(t);
+    }
+    if (countdown <= 0) { resolveRide({ decision: "reject", reason: "Missed — timed out", zone: "expired" }); return; }
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [status, ride, autoAccept, countdown, filters, goAreas, nonGoAreas, resolveRide]);
+
+  const todayAccepted = log.filter((l) => l.decision === "accept");
+  const todayRejected = log.filter((l) => l.decision === "reject");
+  const earnings = todayAccepted.reduce((s, l) => s + l.total, 0);
+
+  const bg = access.highContrast ? "bg-black" : "bg-neutral-50";
+  const card = access.highContrast ? "bg-neutral-900 border border-neutral-700 text-white" : "bg-white border border-neutral-200 text-neutral-900";
+  const muted = access.highContrast ? "text-neutral-400" : "text-neutral-500";
+  const titleSz = access.largeText ? "text-2xl" : "text-xl";
+  const bodySz = access.largeText ? "text-lg" : "text-base";
+  const fareSz = access.largeText ? "text-7xl" : "text-6xl";
+  const btnPad = access.bigButtons ? "py-5 text-lg" : "py-3.5 text-base";
+  const preview = ride ? evaluateRide(ride, filters, goAreas, nonGoAreas) : null;
+
+  return (
+    <div className={`min-h-screen ${bg} flex justify-center`}>
+      <div className="w-full max-w-md flex flex-col" style={{ minHeight: "100vh" }}>
+        <div className="bg-yellow-400 px-5 pt-6 pb-4 rounded-b-3xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2"><span className="text-2xl">🚗</span><span className={`font-bold ${titleSz} text-black`}>Ride Accepter</span></div>
+            <button onClick={() => setOnline((v) => !v)} className={`flex items-center gap-2 px-3 py-2 rounded-full font-semibold ${online ? "bg-black text-white" : "bg-white text-black"}`}>🔌 {online ? "Online" : "Offline"}</button>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-4">
+            <div className="bg-black/10 rounded-xl px-3 py-2"><div className="text-black/70 text-xs">Accepted</div><div className="text-black font-bold text-lg">{todayAccepted.length}</div></div>
+            <div className="bg-black/10 rounded-xl px-3 py-2"><div className="text-black/70 text-xs">Skipped</div><div className="text-black font-bold text-lg">{todayRejected.length}</div></div>
+            <div className="bg-black/10 rounded-xl px-3 py-2"><div className="text-black/70 text-xs">Earnings</div><div className="text-black font-bold text-lg">₹{earnings}</div></div>
+          </div>
+        </div>
+
+        <div className="flex-1 px-5 py-5 space-y-4">
+          {tab === "home" && (
+            <>
+              <div className={`${card} rounded-2xl p-4 flex items-center justify-between`}>
+                <div><div className={`font-semibold ${bodySz}`}>Auto-accept mode</div><div className={`${muted} text-sm`}>{autoAccept ? "Rides are accepted or skipped for you" : "You decide each ride"}</div></div>
+                <Toggle checked={autoAccept} onChange={setAutoAccept} motion={motion} />
+              </div>
+
+              {!online && (<div className={`${card} rounded-2xl p-8 text-center`}><div className={`mx-auto mb-2 ${muted} text-2xl`}>🔌</div><div className={`${bodySz} font-medium`}>You're offline</div><div className={`${muted} text-sm`}>Go online to start receiving rides</div></div>)}
+
+              {online && status === "idle" && (<div className={`${card} rounded-2xl p-10 text-center`}><div className={`mx-auto mb-3 ${muted} text-3xl ${motion ? "animate-pulse" : ""}`}>🚗</div><div className={`${bodySz} font-medium`}>Waiting for the next ride…</div></div>)}
+
+              {ride && status !== "idle" && (
+                <div className={`${card} rounded-2xl p-5 border-2 ${preview?.zone === "avoid" ? "border-red-500" : preview?.zone === "go" ? "border-green-500" : "border-neutral-300"}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className={`px-3 py-1 rounded-full text-sm font-bold ${PLATFORM_STYLE[ride.platform].bg} ${PLATFORM_STYLE[ride.platform].text}`}>{ride.platform}</span>
+                    {ride.bonus > 0 && <span className="px-2 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">+₹{ride.bonus}</span>}
+                    {!autoAccept && <span className={`flex items-center gap-1 ${muted} text-sm ml-auto`}>⏱ {countdown}s</span>}
+                  </div>
+                  <div className={`${fareSz} font-bold`}>₹{ride.total}</div>
+                  <div className={`${muted} ${bodySz} mb-3`}>{ride.bonus > 0 ? `₹${ride.fare} fare + ₹${ride.bonus} bonus · ` : ""}₹{ride.perKm}/km · {ride.rideDist} km ride</div>
+                  <div className="flex items-center gap-2 mb-1"><span className={muted}>📍</span><span className={bodySz}>{ride.pickupDist} km away, drop near {ride.area}</span></div>
+                  <div className={`inline-block mt-2 px-3 py-1 rounded-full text-sm font-medium ${preview?.zone === "avoid" ? "bg-red-100 text-red-700" : preview?.zone === "go" ? "bg-green-100 text-green-700" : "bg-neutral-100 text-neutral-600"}`}>{preview?.reason}</div>
+                  {status === "incoming" && autoAccept && <div className={`mt-4 text-center ${muted} ${bodySz}`}>Deciding…</div>}
+                  {status === "incoming" && !autoAccept && (
+                    <div className="grid grid-cols-2 gap-3 mt-4">
+                      <button onClick={() => resolveRide({ decision: "reject", reason: "You skipped it", zone: "manual" })} className={`${btnPad} rounded-xl font-semibold bg-red-100 text-red-700 flex items-center justify-center gap-2`}>✕ Skip</button>
+                      <button onClick={() => resolveRide({ decision: "accept", reason: "You accepted it", zone: "manual" })} className={`${btnPad} rounded-xl font-semibold bg-green-600 text-white flex items-center justify-center gap-2`}>✓ Accept</button>
+                    </div>
+                  )}
+                  {status === "done" && <div className={`mt-4 text-center font-semibold ${bodySz} ${preview?.decision === "accept" ? "text-green-600" : "text-red-600"}`}>{preview?.decision === "accept" ? "Accepted" : "Skipped"}</div>}
+                </div>
+              )}
+
+              {log.length > 0 && (
+                <div>
+                  <div className={`font-semibold ${bodySz} mb-2`}>Recent rides</div>
+                  <div className="space-y-2">
+                    {log.slice(0, 6).map((l) => (
+                      <div key={l.id} className={`${card} rounded-xl p-3 flex items-center justify-between`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${l.decision === "accept" ? "bg-green-500" : "bg-red-500"}`} />
+                          <div><div className="text-sm font-medium">{l.platform} · ₹{l.total}</div><div className={`text-xs ${muted}`}>{l.reason}</div></div>
+                        </div>
+                        <div className={`text-xs ${muted}`}>{l.area}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === "filters" && (
+            <div className="space-y-4">
+              <div className={`font-semibold ${titleSz}`}>Filters</div>
+              <FilterRow label="Minimum fare I'll accept" unit="₹" value={filters.minFare} min={20} max={300} step={5} onChange={(v) => setFilters((f) => ({ ...f, minFare: v }))} card={card} bodySz={bodySz} muted={muted} />
+              <FilterRow label="Minimum rate per km" unit="₹/km" value={filters.minPerKm} min={5} max={30} step={1} onChange={(v) => setFilters((f) => ({ ...f, minPerKm: v }))} card={card} bodySz={bodySz} muted={muted} />
+              <FilterRow label="Max distance to pickup point" unit="km" value={filters.maxPickupDist} min={0.5} max={8} step={0.5} onChange={(v) => setFilters((f) => ({ ...f, maxPickupDist: v }))} card={card} bodySz={bodySz} muted={muted} />
+              <FilterRow label="Max total ride distance" unit="km" value={filters.maxRideDist} min={2} max={30} step={1} onChange={(v) => setFilters((f) => ({ ...f, maxRideDist: v }))} card={card} bodySz={bodySz} muted={muted} />
+              <div className={`${muted} text-sm`}>Rides in a go-to area are always accepted, and rides in a non-go area are always skipped, no matter what these filters say.</div>
+            </div>
+          )}
+
+          {tab === "zones" && (
+            <div className="space-y-5">
+              <div className={`font-semibold ${titleSz}`}>Zones</div>
+              <AreaList title="Go-to areas" hint="Rides heading here are accepted right away, even at a lower fare." color="green" items={goAreas} onRemove={(a) => setGoAreas((l) => l.filter((x) => x !== a))} addValue={addGo} setAddValue={setAddGo} onAdd={() => { if (addGo && !goAreas.includes(addGo)) setGoAreas((l) => [...l, addGo]); setAddGo(""); }} options={AREA_POOL.filter((a) => !goAreas.includes(a) && !nonGoAreas.includes(a))} card={card} bodySz={bodySz} muted={muted} />
+              <AreaList title="Non-go areas" hint="Rides heading here are always skipped, even at a higher fare." color="red" items={nonGoAreas} onRemove={(a) => setNonGoAreas((l) => l.filter((x) => x !== a))} addValue={addNonGo} setAddValue={setAddNonGo} onAdd={() => { if (addNonGo && !nonGoAreas.includes(addNonGo)) setNonGoAreas((l) => [...l, addNonGo]); setAddNonGo(""); }} options={AREA_POOL.filter((a) => !goAreas.includes(a) && !nonGoAreas.includes(a))} card={card} bodySz={bodySz} muted={muted} />
+            </div>
+          )}
+
+          {tab === "access" && (
+            <div className="space-y-3">
+              <div className={`font-semibold ${titleSz}`}>Accessibility</div>
+              <SettingRow icon="Aa" label="Large text" sub="Bigger fare numbers and labels" checked={access.largeText} onChange={(v) => setAccess((a) => ({ ...a, largeText: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+              <SettingRow icon="◐" label="High contrast" sub="Dark background, bright text — easier in sunlight" checked={access.highContrast} onChange={(v) => setAccess((a) => ({ ...a, highContrast: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+              <SettingRow icon={access.voice ? "🔊" : "🔇"} label="Read rides aloud" sub="Speaks the fare, distance and area for each ride" checked={access.voice} onChange={(v) => setAccess((a) => ({ ...a, voice: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+              <SettingRow icon="📳" label="Vibrate on new ride" sub="Phone buzzes when a ride comes in" checked={access.vibration} onChange={(v) => setAccess((a) => ({ ...a, vibration: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+              <SettingRow icon="♿" label="Big buttons" sub="Larger tap targets for Accept and Skip" checked={access.bigButtons} onChange={(v) => setAccess((a) => ({ ...a, bigButtons: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+              <SettingRow icon="⚡" label="Reduce motion" sub="Turns off animations and transitions" checked={access.reduceMotion} onChange={(v) => setAccess((a) => ({ ...a, reduceMotion: v }))} card={card} bodySz={bodySz} muted={muted} motion={motion} />
+            </div>
+          )}
+
+          {tab === "settings" && (
+            <div className="space-y-4">
+              <div className={`font-semibold ${titleSz}`}>Connected apps</div>
+              <div className={`${card} rounded-2xl p-2`}>
+                {Object.keys(platforms).map((p) => (
+                  <div key={p} className="flex items-center justify-between px-3 py-3 border-b last:border-0 border-neutral-100">
+                    <div className="flex items-center gap-3">
+                      <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${PLATFORM_STYLE[p].bg} ${PLATFORM_STYLE[p].text}`}>{p[0]}</span>
+                      <span className={bodySz}>{p}</span>
+                    </div>
+                    <Toggle checked={platforms[p]} onChange={(v) => setPlatforms((pl) => ({ ...pl, [p]: v }))} motion={motion} />
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setLog([])} className={`${card} w-full rounded-2xl p-3 text-red-600 font-medium flex items-center justify-center gap-2`}>🗑 Clear ride history</button>
+              <div className={`${muted} text-xs px-1`}>This is a working prototype that simulates incoming ride offers to demonstrate the filter logic. It doesn't connect to the real Ola, Uber, or Rapido driver apps.</div>
+            </div>
+          )}
+        </div>
+
+        <div className={`${card} border-t flex sticky bottom-0`}>
+          <TabButton active={tab === "home"} onClick={() => setTab("home")} icon="🏠" label="Home" big={access.bigButtons} />
+          <TabButton active={tab === "filters"} onClick={() => setTab("filters")} icon="🎚️" label="Filters" big={access.bigButtons} />
+          <TabButton active={tab === "zones"} onClick={() => setTab("zones")} icon="📍" label="Zones" big={access.bigButtons} />
+          <TabButton active={tab === "access"} onClick={() => setTab("access")} icon="♿" label="Access" big={access.bigButtons} />
+          <TabButton active={tab === "settings"} onClick={() => setTab("settings")} icon="⚙️" label="Settings" big={access.bigButtons} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
